@@ -1,0 +1,206 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Transform": "AWS::Serverless-2016-10-31",
+  "Description": "<GameName> infrastructure.",
+
+  "Parameters": {
+
+    "GameName" : {
+      "Type": "String", "MinLength": "2"
+    },
+
+    "S3GameServerBucket": {
+      "Type": "String", "MinLength": "0"
+    },
+
+    "GameServerVersion": {
+      "Type": "String",
+      "AllowedPattern": "(\\d+).(\\d+).(\\d+)"
+    },
+
+    "ShouldCreateSessionsTable": {
+      "Type": "String", "AllowedValues": ["true", "false"],
+      "Description": "If true then the DynamoDB sessions table will be created with the CloudFormation stack."
+    },
+
+    "SessionsTableName": {
+      "Type": "String", "MinLength": "0",
+      "Description": "Name of DynamoDB table used to store player sessions. If left blank a new table will be created."
+    }
+
+  },
+
+  "Conditions": {
+    "CreateSessionsTable": {"Fn::Equals": [{"Ref": "ShouldCreateSessionsTable"}, "true" ]},
+    "SessionsTableNameGenerated": {"Fn::Equals": [{"Ref": "SessionsTableName"}, ""]}
+  },
+
+  "Resources": {
+
+    "SessionsTable" : {
+      "Type" : "AWS::DynamoDB::Table",
+      "Condition": "CreateSessionsTable",
+      "Properties" : {
+        "TableName": {"Fn::If": ["SessionsTableNameGenerated", { "Ref": "AWS::NoValue" }, { "Ref": "SessionsTableName" }]},
+        "AttributeDefinitions" : [
+          {"AttributeName" : "PlayerId", "AttributeType" : "S"}
+        ],
+        "KeySchema" : [
+          {"AttributeName" : "PlayerId", "KeyType" : "HASH"}
+        ],
+        "BillingMode" : "PAY_PER_REQUEST"
+      }
+    },
+
+    "MetaSessionWizard": {
+      "Type": "AWS::Serverless::Function",
+      "Properties": {
+        "Handler": "Serverless::Serverless.Wizards::MetaSessionWizard",
+        "Runtime": "dotnetcore3.1",
+        "CodeUri": "",
+        "MemorySize": 256,
+        "Timeout": 30,
+        "Role": null,
+        "Policies": [
+          "AWSLambdaBasicExecutionRole",
+          "AmazonDynamoDBFullAccess"
+        ],
+        "Events": {
+          "Connect": {
+            "Type": "Api",
+            "Properties": {"Path": "/connect", "Method": "GET"}
+          }
+        },
+        "Environment": {
+          "Variables": {
+            "SessionsTable": {"Fn::If": ["CreateSessionsTable", {"Ref": "SessionsTable"}, {"Ref": "SessionsTableName"}]}
+          }
+        }
+      }
+    },
+
+    "MetaServerBuild": {
+      "Type": "AWS::GameLift::Build",
+      "Properties": {
+        "Name": {"Fn::Sub": "${GameName}_MetaServerBuild"},
+        "Version": {"Ref": "GameServerVersion"},
+        "OperatingSystem": "AMAZON_LINUX_2",
+        "StorageLocation": {
+          "Bucket": {"Ref": "S3GameServerBucket"},
+          "Key": "meta_build.zip",
+          "RoleArn": {"Fn::GetAtt": ["BuildIAMRole", "Arn"]
+          }
+        }
+      }
+    },
+
+    "MetaServerQueue": {
+      "Type": "AWS::GameLift::GameSessionQueue",
+      "Properties": {
+        "Name": "MetaServerQueue",
+        "TimeoutInSeconds": 60,
+        "NotificationTarget": {"Fn::Sub": "${GameName}_MetaServerQueue"},
+        "Destinations": [{"DestinationArn": {"Fn::GetAtt": [{"Ref": "MetaServerFleetAlias"}, "ARN" ]}}]
+      }
+    },
+
+    "MetaServerFleetAlias": {
+      "Type": "AWS::GameLift::Alias",
+      "Properties": {
+        "Name": "MetaServerFleetAlias",
+        "RoutingStrategy": {"Type": "SIMPLE", "FleetId": {"Ref": "MetaServerFleet"}}
+      }
+    },
+
+    "MetaServerFleet": {
+      "Type": "AWS::GameLift::Fleet",
+      "Properties": {
+        "Name": {"Fn::Sub": "${GameName}_MetaServerFleet"},
+        "BuildId": {"Ref": "MetaServerBuild"},
+        "CertificateConfiguration": {"CertificateType": "GENERATED"},
+        "DesiredEc2Instances": 1,
+        "MinSize": 1,
+        "MaxSize": 10,
+        "EC2InboundPermissions": [
+        {
+            "FromPort": 30000,
+            "ToPort": 40000,
+            "IpRange": "0.0.0.0/0",
+            "Protocol": "TCP"
+        }],
+        "EC2InstanceType": "c5.large",
+        "FleetType": "ON_DEMAND",
+        "LogPaths": ["c:\\game\\log.log"],
+        "NewGameSessionProtectionPolicy": "FullProtection",
+        "ResourceCreationLimitPolicy": {
+          "NewGameSessionsPerCreator": 3,
+          "PolicyPeriodInMinutes": 1
+        },
+        "RuntimeConfiguration": {
+          "GameSessionActivationTimeoutSeconds": 10,
+          "MaxConcurrentGameSessionActivations": 200,
+          "ServerProcesses": [
+          {
+            "ConcurrentExecutions": 1,
+            "LaunchPath": "c:\\game\\MetaServer.exe"
+          }]
+        },
+        "MetricGroups" : [{"Fn::Sub": "${GameName}_MetaServerFleet"}]
+      }
+    },
+
+
+
+    "BuildIAMRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                    "cloudformation.amazonaws.com",
+                    "gamelift.amazonaws.com"
+                ]
+            },
+            "Action": "sts:AssumeRole"
+          }]
+        },
+        "RoleName": "BuildIAMRole",
+        "Policies": [
+        {
+          "PolicyName": "gamelift-s3-access-policy",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                  "s3:GetObject",
+                  "s3:GetObjectVersion",
+                  "s3:GetObjectMetadata",
+                  "s3:*Object*"
+              ],
+              "Resource":  [{"Fn::Sub": "arn:aws:s3:::${S3GameServerBucket}/*"}]
+            }]
+          }
+        }]
+      }
+    }
+  },
+
+  "Outputs": {
+
+    "ClientConnectOn": {
+      "Description": "API endpoint URL for start session placement",
+      "Value": {"Fn::Sub": "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/connect"}
+    },
+
+    "SessionsTable": {
+      "Value": {"Fn::If": ["CreateSessionsTable", {"Ref": "SessionsTable"}, {"Ref": "SessionsTableName"}]}
+    }
+
+  }
+}
