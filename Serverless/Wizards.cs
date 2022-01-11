@@ -47,7 +47,9 @@ namespace Serverless
 
         public async Task<APIGatewayProxyResponse> MetaSessionWizard(APIGatewayProxyRequest request, ILambdaContext context)
         {
-            context.Logger.LogLine($"Request from: {request.RequestContext.Identity.SourceIp}\n");
+            context.Logger.LogLine($"Matchmaking request from: {request.RequestContext.Identity.SourceIp}\n");
+            context.Logger.LogLine($"User: {request.RequestContext.Identity.User}\n");
+            context.Logger.LogLine($"Cognito Identity: {request.RequestContext.Identity.CognitoIdentityId}\n");
 
             var session = new PlayerSession
             {

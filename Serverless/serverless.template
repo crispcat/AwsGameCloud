@@ -1,7 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
   "Transform": "AWS::Serverless-2016-10-31",
-  "Description": "<GameName> infrastructure.",
 
   "Parameters": {
 
@@ -18,37 +17,94 @@
       "AllowedPattern": "(\\d+).(\\d+).(\\d+)"
     },
 
-    "ShouldCreateSessionsTable": {
-      "Type": "String", "AllowedValues": ["true", "false"],
-      "Description": "If true then the DynamoDB sessions table will be created with the CloudFormation stack."
-    },
-
-    "SessionsTableName": {
-      "Type": "String", "MinLength": "0",
-      "Description": "Name of DynamoDB table used to store player sessions. If left blank a new table will be created."
+    "DeployGameServers": {
+      "Type": "String",
+      "AllowedValues": ["true", "false"],
+      "Default": "true"
     }
-
   },
 
-  "Conditions": {
-    "CreateSessionsTable": {"Fn::Equals": [{"Ref": "ShouldCreateSessionsTable"}, "true" ]},
-    "SessionsTableNameGenerated": {"Fn::Equals": [{"Ref": "SessionsTableName"}, ""]}
+  "Conditions":
+  {
+    "DeployGameServersCond": {"Fn::Equals": [{"Ref": "DeployGameServers"}, "true"]}
   },
 
   "Resources": {
 
-    "SessionsTable" : {
-      "Type" : "AWS::DynamoDB::Table",
-      "Condition": "CreateSessionsTable",
+    "IdentityPool": {
+      "Type": "AWS::Cognito::IdentityPool",
+      "Properties": {
+        "IdentityPoolName": {"Fn::Sub": "${GameName}-identity-pool"},
+        "AllowUnauthenticatedIdentities": false,
+        "CognitoIdentityProviders": [
+        {
+          "ClientId": {"Ref": "UserPoolClient"},
+          "ProviderName": {"Fn::GetAtt": ["CognitoUserPool", "ProviderName"]}
+        }]
+      }
+    },
+
+    "UserPoolClient": {
+      "Type": "AWS::Cognito::UserPoolClient",
+      "Properties": {
+        "ClientName": {"Fn::Sub": "Sub ${GameName}-user-pool-client"},
+        "GenerateSecret": false,
+        "UserPoolId": {"Ref": "CognitoUserPool"}
+      }
+    },
+
+    "CognitoUserPool": {
+      "Type" : "AWS::Cognito::UserPool",
       "Properties" : {
-        "TableName": {"Fn::If": ["SessionsTableNameGenerated", { "Ref": "AWS::NoValue" }, { "Ref": "SessionsTableName" }]},
-        "AttributeDefinitions" : [
-          {"AttributeName" : "PlayerId", "AttributeType" : "S"}
-        ],
-        "KeySchema" : [
-          {"AttributeName" : "PlayerId", "KeyType" : "HASH"}
-        ],
-        "BillingMode" : "PAY_PER_REQUEST"
+        "UserPoolName" : {"Fn::Sub":"${GameName}-user-pool"},
+        "UsernameAttributes" : ["email"],
+        "UsernameConfiguration" : {"CaseSensitive" : false},
+        "AutoVerifiedAttributes" : ["email"],
+        "DeviceConfiguration" : {"DeviceOnlyRememberedOnUserPrompt" : true},
+        "VerificationMessageTemplate" : {
+          "DefaultEmailOption" : "CONFIRM_WITH_LINK",
+          "EmailMessageByLink" : "Please click the link below to verify your account {##Verify Email##}. Have a nice day!",
+          "EmailSubjectByLink" : {"Fn::Sub":"${GameName} account activation."}
+        },
+        "AccountRecoverySetting" : {
+          "RecoveryMechanisms" : [
+          {
+            "Priority": 1,
+            "Name": "verified_email"
+          }]
+        },
+        "AdminCreateUserConfig" : {
+          "AllowAdminCreateUserOnly" : false,
+          "InviteMessageTemplate" : {
+            "EmailMessage" : "You user account has been created. Your username is {username} and temporary password is {####}. Please change it.",
+            "EmailSubject" : {"Fn::Sub":"${GameName} invite!"}
+          },
+          "UnusedAccountValidityDays" : 7
+        }
+      }
+    },
+
+    "UserPoolDomain":{
+      "Type":"AWS::Cognito::UserPoolDomain",
+      "Properties": {
+         "UserPoolId": {"Ref": "CognitoUserPool"},
+         "Domain": {"Fn::Sub":"${GameName}-auth"}
+      }
+   },
+
+    "ApiGateway": {
+      "Type": "AWS::Serverless::Api",
+      "Properties": {
+        "StageName": "Prod",
+        "Cors": "'*'",
+        "Auth": {
+          "DefaultAuthorizer": "CognitoAuthorizer",
+          "Authorizers": {
+            "CognitoAuthorizer": {
+              "UserPoolArn": {"Fn::GetAtt": ["CognitoUserPool", "Arn"]}
+            }
+          }
+        }
       }
     },
 
@@ -60,51 +116,69 @@
         "CodeUri": "",
         "MemorySize": 256,
         "Timeout": 30,
-        "Role": null,
-        "Policies": [
-          "AWSLambdaBasicExecutionRole",
-          "AmazonDynamoDBFullAccess"
-        ],
+        "Role": {"Fn::GetAtt": ["MetaLambdaAccessIAMRole", "Arn"]},
         "Events": {
           "Connect": {
             "Type": "Api",
-            "Properties": {"Path": "/connect", "Method": "GET"}
+            "Properties": {
+              "Path": "/connect", 
+              "Method": "GET",
+              "RestApiId": {"Ref": "ApiGateway"}
+            }
           }
         },
         "Environment": {
           "Variables": {
-            "SessionsTable": {"Fn::If": ["CreateSessionsTable", {"Ref": "SessionsTable"}, {"Ref": "SessionsTableName"}]}
+            "SessionsTable": {"Ref": "SessionsTable"}
           }
         }
       }
     },
 
+    "SessionsTable" : {
+      "Type" : "AWS::DynamoDB::Table",
+      "Properties" : {
+        "TableName": {"Fn::Sub": "${GameName}-sessions-table"},
+        "AttributeDefinitions" : [
+          {"AttributeName" : "PlayerId", "AttributeType" : "S"}
+        ],
+        "KeySchema" : [
+          {"AttributeName" : "PlayerId", "KeyType" : "HASH"}
+        ],
+        "BillingMode" : "PAY_PER_REQUEST"
+      }
+    },
+
     "MetaServerBuild": {
+      "Condition": "DeployGameServersCond",
       "Type": "AWS::GameLift::Build",
       "Properties": {
-        "Name": {"Fn::Sub": "${GameName}_MetaServerBuild"},
+        "Name": {"Fn::Sub": "${GameName}-meta-server-build-${GameServerVersion}"},
         "Version": {"Ref": "GameServerVersion"},
         "OperatingSystem": "AMAZON_LINUX_2",
         "StorageLocation": {
           "Bucket": {"Ref": "S3GameServerBucket"},
-          "Key": "meta_build.zip",
-          "RoleArn": {"Fn::GetAtt": ["BuildIAMRole", "Arn"]
-          }
+          "Key": {"Fn::Sub":"meta_server_build_${GameServerVersion}.zip"},
+          "RoleArn": {"Fn::GetAtt": ["BuildIAMRole", "Arn"]}
         }
       }
     },
 
     "MetaServerQueue": {
+      "Condition": "DeployGameServersCond",
       "Type": "AWS::GameLift::GameSessionQueue",
       "Properties": {
-        "Name": "MetaServerQueue",
-        "TimeoutInSeconds": 60,
-        "NotificationTarget": {"Fn::Sub": "${GameName}_MetaServerQueue"},
-        "Destinations": [{"DestinationArn": {"Fn::GetAtt": [{"Ref": "MetaServerFleetAlias"}, "ARN" ]}}]
+        "Name": {"Fn::Sub": "${GameName}-meta-server-queue"},
+        "TimeoutInSeconds": 15,
+        "Destinations": [{
+          "DestinationArn": {
+            "Fn::Sub": ["arn:aws:gamelift:${AWS::Region}:${AWS::AccountId}:alias/${AliasId}", {"AliasId": {"Ref": "MetaServerFleetAlias"}}]}
+          }]
       }
     },
 
     "MetaServerFleetAlias": {
+      "Condition": "DeployGameServersCond",
       "Type": "AWS::GameLift::Alias",
       "Properties": {
         "Name": "MetaServerFleetAlias",
@@ -113,12 +187,12 @@
     },
 
     "MetaServerFleet": {
+      "Condition": "DeployGameServersCond",
       "Type": "AWS::GameLift::Fleet",
       "Properties": {
-        "Name": {"Fn::Sub": "${GameName}_MetaServerFleet"},
+        "Name": {"Fn::Sub": "${GameName}-meta-server-fleet"},
         "BuildId": {"Ref": "MetaServerBuild"},
         "CertificateConfiguration": {"CertificateType": "GENERATED"},
-        "DesiredEc2Instances": 1,
         "MinSize": 1,
         "MaxSize": 10,
         "EC2InboundPermissions": [
@@ -130,7 +204,7 @@
         }],
         "EC2InstanceType": "c5.large",
         "FleetType": "ON_DEMAND",
-        "LogPaths": ["c:\\game\\log.log"],
+        "LogPaths": ["/local/game/journal.log"],
         "NewGameSessionProtectionPolicy": "FullProtection",
         "ResourceCreationLimitPolicy": {
           "NewGameSessionsPerCreator": 3,
@@ -138,18 +212,37 @@
         },
         "RuntimeConfiguration": {
           "GameSessionActivationTimeoutSeconds": 10,
-          "MaxConcurrentGameSessionActivations": 200,
+          "MaxConcurrentGameSessionActivations": 1,
           "ServerProcesses": [
           {
             "ConcurrentExecutions": 1,
-            "LaunchPath": "c:\\game\\MetaServer.exe"
+            "LaunchPath": "/local/game/MetaServer"
           }]
         },
-        "MetricGroups" : [{"Fn::Sub": "${GameName}_MetaServerFleet"}]
+        "MetricGroups" : [{"Fn::Sub": "${GameName}_meta-server-fleet"}]
       }
     },
 
+    "MetaServerMatchmaker": {
+      "Type" : "AWS::GameLift::MatchmakingConfiguration",
+      "Properties" : {
+        "AcceptanceRequired" : false,
+        "BackfillMode" : "AUTOMATIC",
+        "FlexMatchMode" : "WITH_QUEUE",
+        "GameSessionQueueArns" : [{"Fn::GetAtt": ["MetaServerQueue", "Arn"]}],
+        "Name" : "MetaServerMatchmaker",
+        "RequestTimeoutSeconds" : 30,
+        "RuleSetName" : "MetaServerMatchmakerRuleSet"
+      }
+    },
 
+    "MetaServerMatchmakerRuleSet": {
+      "Type" : "AWS::GameLift::MatchmakingRuleSet",
+      "Properties" : {
+        "Name" : "MetaServerMatchmakerRuleSet",
+        "RuleSetBody" : "{\"name\": \"free-for-all\", \"ruleLanguageVersion\": \"1.0\", \"playerAttributes\":[{ \"name\": \"dummy\",\"type\": \"number\", \"default\": 0}],\"algorithm\": {\"balancedAttribute\": \"dummy\",\"strategy\": \"balanced\",\"batchingPreference\": \"largestPopulation\"},\"teams\": [{\"name\": \"players\",\"maxPlayers\": 200,\"minPlayers\": 1}]}"
+      }
+    },
 
     "BuildIAMRole": {
       "Type": "AWS::IAM::Role",
@@ -168,7 +261,7 @@
             "Action": "sts:AssumeRole"
           }]
         },
-        "RoleName": "BuildIAMRole",
+        "RoleName": "iam-build-access-role",
         "Policies": [
         {
           "PolicyName": "gamelift-s3-access-policy",
@@ -188,19 +281,64 @@
           }
         }]
       }
+    },
+
+    "MetaLambdaAccessIAMRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+        ],
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": {
+              "Service": [
+                "lambda.amazonaws.com",
+                "edgelambda.amazonaws.com"
+              ]
+            },
+            "Action": "sts:AssumeRole"
+          }]
+        },
+        "RoleName": "meta-lambda-access-IAMRole",
+        "Policies": [{
+          "PolicyName": "meta-lambda-access-policy",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": "gamelift:*",
+              "Resource": "*"
+            }]
+          }
+        }]
+      }
     }
   },
 
   "Outputs": {
-
-    "ClientConnectOn": {
+    
+    "ClientCanConnectOn": {
       "Description": "API endpoint URL for start session placement",
-      "Value": {"Fn::Sub": "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/connect"}
+      "Value": {"Fn::Sub": "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/connect"}
     },
 
-    "SessionsTable": {
-      "Value": {"Fn::If": ["CreateSessionsTable", {"Ref": "SessionsTable"}, {"Ref": "SessionsTableName"}]}
-    }
+    "UserPoolId": {
+      "Description": "User pool id",
+      "Value": {"Ref": "CognitoUserPool"}
+    },
 
+    "UserPoolClientId": {
+      "Description": "User pool client",
+      "Value": {"Ref": "UserPoolClient"}
+    },
+
+    "IdentityPoolId": {
+      "Description": "Identity pool id",
+      "Value": {"Ref": "IdentityPool"}
+    }
   }
 }

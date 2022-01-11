@@ -1,0 +1,1 @@
+aws cloudformation validate-template --template-body file://Serverless/serverless.template
