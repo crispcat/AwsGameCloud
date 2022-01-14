@@ -9,8 +9,14 @@
         
         [DynamoDBHashKey] public string PlayerId { get; set; }
         
-        public string MetaFleetId { get; set; }
-        public string MetaServerId { get; set; }
         public DateTime LastUpdated { get; set; }
+
+        public bool IsActive { get; set; }
+
+        public string MetaGameSessionArn { get; set; }
+
+        public string MetaServerIp { get; set; }
+
+        public int MetaServerPort { get; set; }
     }
 }

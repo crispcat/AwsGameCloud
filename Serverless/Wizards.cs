@@ -8,10 +8,13 @@ namespace Serverless
     using System.Net;
     using System.Threading.Tasks;
     using System.Collections.Generic;
-    
+    using System.Linq;
+    using System.Threading;
     using Amazon;
     using Amazon.DynamoDBv2;
     using Amazon.DynamoDBv2.DataModel;
+    using Amazon.GameLift;
+    using Amazon.GameLift.Model;
     using Amazon.Lambda.APIGatewayEvents;
     
     using Newtonsoft.Json;
@@ -19,8 +22,10 @@ namespace Serverless
     public class Wizards
     {
         private IDynamoDBContext db;
+        private AmazonGameLiftClient gameLiftClient;
 
         private const string SESSIONS_TABLE_NAME = "SessionsTable";
+        private const string META_SERVER_MATCHMAKER = "MetaServerMatchmaker";
         
         private static readonly DynamoDBContextConfig config = new DynamoDBContextConfig
         {
@@ -37,28 +42,70 @@ namespace Serverless
         {
             CreateTypeMapping(typeof(PlayerSession), Environment.GetEnvironmentVariable(SESSIONS_TABLE_NAME));
             db = new DynamoDBContext(new AmazonDynamoDBClient(), config);
+            
+            gameLiftClient = new AmazonGameLiftClient();
         }
 
         public Wizards(IAmazonDynamoDB dbClient, string tableName)
         {
             CreateTypeMapping(typeof(PlayerSession), tableName);
             db = new DynamoDBContext(dbClient, config);
+            
+            gameLiftClient = new AmazonGameLiftClient();
         }
 
         public async Task<APIGatewayProxyResponse> MetaSessionWizard(APIGatewayProxyRequest request, ILambdaContext context)
         {
             context.Logger.LogLine($"Matchmaking request from: {request.RequestContext.Identity.SourceIp}\n");
-            context.Logger.LogLine($"User: {request.RequestContext.Identity.User}\n");
-            context.Logger.LogLine($"Cognito Identity: {request.RequestContext.Identity.CognitoIdentityId}\n");
+            context.Logger.LogLine($"Auth context: {string.Join(Environment.NewLine, request.RequestContext.Authorizer.Claims)}\n");
 
-            var session = new PlayerSession
+            var playerId = request.RequestContext.Authorizer.Claims["cognito:username"];
+            
+            var fetchedSession = await db.LoadAsync<PlayerSession>(playerId) ?? new PlayerSession
             {
-                PlayerId = Guid.NewGuid().ToString(),
+                PlayerId = playerId,
                 LastUpdated = DateTime.Now,
+                IsActive = false
             };
+            
+            if (fetchedSession.IsActive)
+                return new APIGatewayProxyResponse { StatusCode = (int) HttpStatusCode.MethodNotAllowed };
 
-            await db.SaveAsync(session);
-            var fetchedSession = await db.LoadAsync<PlayerSession>(session.PlayerId);
+            var ticketId = Guid.NewGuid().ToString();
+            await gameLiftClient.StartMatchmakingAsync(new StartMatchmakingRequest
+            {
+                TicketId = ticketId,
+                ConfigurationName = Environment.GetEnvironmentVariable(META_SERVER_MATCHMAKER),
+                Players = new List<Player> { new Player { PlayerId = playerId, Team = "players" }},
+            });
+
+            // TODO: make sns topic with wss gateway connection to track mm events
+            
+            MatchmakingTicket ticket = null;
+            var ticketIds = new List<string> { ticketId };
+            
+            bool matchmakingInProgress = true;
+            while (matchmakingInProgress)
+            {
+                await Task.Delay(1000);
+                ticket = 
+                    (await gameLiftClient.DescribeMatchmakingAsync(new DescribeMatchmakingRequest { TicketIds = ticketIds }))
+                    .TicketList
+                    .First();
+
+                matchmakingInProgress = !MatchmakingIsDone(ticket.Status);
+            }
+            
+            if (ticket.Status != MatchmakingConfigurationStatus.COMPLETED)
+                return new APIGatewayProxyResponse { StatusCode = (int) HttpStatusCode.InternalServerError };
+
+            fetchedSession.IsActive = true;
+            fetchedSession.LastUpdated = DateTime.Now;
+            fetchedSession.MetaGameSessionArn = ticket.GameSessionConnectionInfo.GameSessionArn;
+            fetchedSession.MetaServerIp = ticket.GameSessionConnectionInfo.IpAddress;
+            fetchedSession.MetaServerPort = ticket.GameSessionConnectionInfo.Port;
+            
+            await db.SaveAsync(fetchedSession);
 
             var response = new APIGatewayProxyResponse
             {
@@ -68,6 +115,14 @@ namespace Serverless
             };
 
             return response;
+        }
+
+        private static bool MatchmakingIsDone(MatchmakingConfigurationStatus status)
+        {
+            return status == MatchmakingConfigurationStatus.FAILED     
+                || status == MatchmakingConfigurationStatus.TIMED_OUT
+                || status == MatchmakingConfigurationStatus.CANCELLED
+                || status == MatchmakingConfigurationStatus.COMPLETED;
         }
     }
 }

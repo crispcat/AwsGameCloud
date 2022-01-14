@@ -1,14 +1,11 @@
 $gameName=$args[0]
 $version=$args[1]
 $region=$args[2]
-$serverBuildPath=$args[3]
-
-$deployGameServers = "false"
+$deployGameServers=$args[3]
+$serverBuildPath=$args[4]
 
 if ($serverBuildPath -ne $null)
 {
-	$deployGameServers = "true"
-	
 	Remove-Item "$($serverBuildPath)\build*.zip"
 	
 	$compress = @{

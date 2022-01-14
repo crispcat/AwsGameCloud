@@ -63,7 +63,7 @@
         "DeviceConfiguration" : {"DeviceOnlyRememberedOnUserPrompt" : true},
         "VerificationMessageTemplate" : {
           "DefaultEmailOption" : "CONFIRM_WITH_LINK",
-          "EmailMessageByLink" : "Please click the link below to verify your account {##Verify Email##}. Have a nice day!",
+          "EmailMessageByLink" : "Please click the link below to verify your account. \n{##Verify Account##}. \nHave a nice day!",
           "EmailSubjectByLink" : {"Fn::Sub":"${GameName} account activation."}
         },
         "AccountRecoverySetting" : {
@@ -129,7 +129,8 @@
         },
         "Environment": {
           "Variables": {
-            "SessionsTable": {"Ref": "SessionsTable"}
+            "SessionsTable": {"Ref": "SessionsTable"},
+            "MetaServerMatchmaker": {"Ref": "MetaServerMatchmaker"}
           }
         }
       }
@@ -224,22 +225,24 @@
     },
 
     "MetaServerMatchmaker": {
+      "Condition": "DeployGameServersCond",
       "Type" : "AWS::GameLift::MatchmakingConfiguration",
       "Properties" : {
         "AcceptanceRequired" : false,
         "BackfillMode" : "AUTOMATIC",
         "FlexMatchMode" : "WITH_QUEUE",
         "GameSessionQueueArns" : [{"Fn::GetAtt": ["MetaServerQueue", "Arn"]}],
-        "Name" : "MetaServerMatchmaker",
+        "Name" : {"Fn::Sub": "${GameName}-meta-server-matchmaker"},
         "RequestTimeoutSeconds" : 30,
         "RuleSetName" : "MetaServerMatchmakerRuleSet"
       }
     },
 
     "MetaServerMatchmakerRuleSet": {
+      "Condition": "DeployGameServersCond",
       "Type" : "AWS::GameLift::MatchmakingRuleSet",
       "Properties" : {
-        "Name" : "MetaServerMatchmakerRuleSet",
+        "Name" : {"Fn::Sub": "${GameName}-meta-server-matchmaker-rule-set"},
         "RuleSetBody" : "{\"name\": \"free-for-all\", \"ruleLanguageVersion\": \"1.0\", \"playerAttributes\":[{ \"name\": \"dummy\",\"type\": \"number\", \"default\": 0}],\"algorithm\": {\"balancedAttribute\": \"dummy\",\"strategy\": \"balanced\",\"batchingPreference\": \"largestPopulation\"},\"teams\": [{\"name\": \"players\",\"maxPlayers\": 200,\"minPlayers\": 1}]}"
       }
     },
