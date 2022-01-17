@@ -115,7 +115,7 @@
         "Runtime": "dotnetcore3.1",
         "CodeUri": "",
         "MemorySize": 256,
-        "Timeout": 30,
+        "Timeout": 45,
         "Role": {"Fn::GetAtt": ["MetaLambdaAccessIAMRole", "Arn"]},
         "Events": {
           "Connect": {
@@ -170,7 +170,7 @@
       "Type": "AWS::GameLift::GameSessionQueue",
       "Properties": {
         "Name": {"Fn::Sub": "${GameName}-meta-server-queue"},
-        "TimeoutInSeconds": 15,
+        "TimeoutInSeconds": 10,
         "Destinations": [{
           "DestinationArn": {
             "Fn::Sub": ["arn:aws:gamelift:${AWS::Region}:${AWS::AccountId}:alias/${AliasId}", {"AliasId": {"Ref": "MetaServerFleetAlias"}}]}
@@ -234,7 +234,7 @@
         "GameSessionQueueArns" : [{"Fn::GetAtt": ["MetaServerQueue", "Arn"]}],
         "Name" : {"Fn::Sub": "${GameName}-meta-server-matchmaker"},
         "RequestTimeoutSeconds" : 30,
-        "RuleSetName" : "MetaServerMatchmakerRuleSet"
+        "RuleSetName" : {"Fn::Sub": "${GameName}-meta-server-matchmaker-rule-set"}
       }
     },
 
@@ -243,7 +243,7 @@
       "Type" : "AWS::GameLift::MatchmakingRuleSet",
       "Properties" : {
         "Name" : {"Fn::Sub": "${GameName}-meta-server-matchmaker-rule-set"},
-        "RuleSetBody" : "{\"name\": \"free-for-all\", \"ruleLanguageVersion\": \"1.0\", \"playerAttributes\":[{ \"name\": \"dummy\",\"type\": \"number\", \"default\": 0}],\"algorithm\": {\"balancedAttribute\": \"dummy\",\"strategy\": \"balanced\",\"batchingPreference\": \"largestPopulation\"},\"teams\": [{\"name\": \"players\",\"maxPlayers\": 200,\"minPlayers\": 1}]}"
+        "RuleSetBody" : "{\"name\": \"free-for-all\", \"ruleLanguageVersion\": \"1.0\", \"playerAttributes\":[{ \"name\": \"dummy\",\"type\": \"number\", \"default\": 0}],\"algorithm\": {\"balancedAttribute\": \"dummy\",\"strategy\": \"balanced\",\"batchingPreference\": \"largestPopulation\"},\"teams\": [{\"name\": \"players\",\"maxPlayers\": 200,\"minPlayers\": 0}]}"
       }
     },
 
@@ -264,10 +264,10 @@
             "Action": "sts:AssumeRole"
           }]
         },
-        "RoleName": "iam-build-access-role",
+        "RoleName": {"Fn::Sub": "${GameName}-iam-build-access-role"},
         "Policies": [
         {
-          "PolicyName": "gamelift-s3-access-policy",
+          "PolicyName": {"Fn::Sub": "${GameName}-gamelift-s3-access-policy"},
           "PolicyDocument": {
             "Version": "2012-10-17",
             "Statement": [
@@ -306,9 +306,9 @@
             "Action": "sts:AssumeRole"
           }]
         },
-        "RoleName": "meta-lambda-access-IAMRole",
+        "RoleName": {"Fn::Sub": "${GameName}-iam-meta-lambda-access-role"},
         "Policies": [{
-          "PolicyName": "meta-lambda-access-policy",
+          "PolicyName": {"Fn::Sub": "${GameName}-meta-lambda-access-policy"},
           "PolicyDocument": {
             "Version": "2012-10-17",
             "Statement": [{

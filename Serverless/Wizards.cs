@@ -68,16 +68,21 @@ namespace Serverless
                 IsActive = false
             };
             
-            if (fetchedSession.IsActive)
-                return new APIGatewayProxyResponse { StatusCode = (int) HttpStatusCode.MethodNotAllowed };
+            context.Logger.LogLine($"Fetched session: {fetchedSession}\n");
+            
+            // TODO: uncomment it when matchmaking process calibrated
+            // if (fetchedSession.IsActive)
+            //     return new APIGatewayProxyResponse { StatusCode = (int) HttpStatusCode.MethodNotAllowed };
 
             var ticketId = Guid.NewGuid().ToString();
             await gameLiftClient.StartMatchmakingAsync(new StartMatchmakingRequest
             {
                 TicketId = ticketId,
                 ConfigurationName = Environment.GetEnvironmentVariable(META_SERVER_MATCHMAKER),
-                Players = new List<Player> { new Player { PlayerId = playerId, Team = "players" }},
+                Players = new List<Player> { new Player { PlayerId = Guid.NewGuid().ToString(), Team = "players" }},
             });
+            
+            context.Logger.LogLine($"Matchmaking started! TicketId: {ticketId}\n");
 
             // TODO: make sns topic with wss gateway connection to track mm events
             
@@ -93,8 +98,11 @@ namespace Serverless
                     .TicketList
                     .First();
 
+                context.Logger.LogLine($"Matchmaking in progress... TicketId: {ticketId}. Status: {ticket.Status}\n");
                 matchmakingInProgress = !MatchmakingIsDone(ticket.Status);
             }
+            
+            context.Logger.LogLine($"Matchmaking done with result {ticket.Status.Value}\n");
             
             if (ticket.Status != MatchmakingConfigurationStatus.COMPLETED)
                 return new APIGatewayProxyResponse { StatusCode = (int) HttpStatusCode.InternalServerError };
@@ -104,7 +112,7 @@ namespace Serverless
             fetchedSession.MetaGameSessionArn = ticket.GameSessionConnectionInfo.GameSessionArn;
             fetchedSession.MetaServerIp = ticket.GameSessionConnectionInfo.IpAddress;
             fetchedSession.MetaServerPort = ticket.GameSessionConnectionInfo.Port;
-            
+
             await db.SaveAsync(fetchedSession);
 
             var response = new APIGatewayProxyResponse
