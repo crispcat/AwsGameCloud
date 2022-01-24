@@ -1,6 +1,7 @@
 ﻿namespace Serverless
 {
     using System;
+    using System.Collections.Generic;
     using Amazon.DynamoDBv2.DataModel;
 
     public class PlayerSession

@@ -29,7 +29,8 @@ namespace Serverless
         
         private static readonly DynamoDBContextConfig config = new DynamoDBContextConfig
         {
-            Conversion = DynamoDBEntryConversion.V2
+            Conversion = DynamoDBEntryConversion.V2,
+            ConsistentRead = true
         };
 
         private static void CreateTypeMapping(Type t, string tableName)

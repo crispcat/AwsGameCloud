@@ -150,6 +150,20 @@
       }
     },
 
+    "PlayerDataTable" : {
+      "Type" : "AWS::DynamoDB::Table",
+      "Properties" : {
+        "TableName": {"Fn::Sub": "${GameName}-player-data-table"},
+        "AttributeDefinitions" : [
+          {"AttributeName" : "key", "AttributeType" : "S"}
+        ],
+        "KeySchema" : [
+          {"AttributeName" : "key", "KeyType" : "HASH"}
+        ],
+        "BillingMode" : "PAY_PER_REQUEST"
+      }
+    },
+
     "MetaServerBuild": {
       "Condition": "DeployGameServersCond",
       "Type": "AWS::GameLift::Build",
@@ -193,6 +207,7 @@
       "Properties": {
         "Name": {"Fn::Sub": "${GameName}-meta-server-fleet"},
         "BuildId": {"Ref": "MetaServerBuild"},
+        "InstanceRoleARN": {"Fn::GetAtt": ["GameServerAccessIAMRole", "Arn"]},
         "CertificateConfiguration": {"CertificateType": "GENERATED"},
         "MinSize": 1,
         "MaxSize": 10,
@@ -217,10 +232,16 @@
           "ServerProcesses": [
           {
             "ConcurrentExecutions": 1,
-            "LaunchPath": "/local/game/MetaServer"
+            "LaunchPath": "/local/game/MetaServer",
+            "Parameters": {"Fn::Sub": ["${SessionsTableName} ${PlayerDataTableName} ${RoleArn}", 
+            {
+              "SessionsTableName": {"Ref": "SessionsTable"},
+              "PlayerDataTableName": {"Ref": "PlayerDataTable"},
+              "RoleArn": {"Fn::GetAtt": ["GameServerAccessIAMRole", "Arn"]} 
+            }]}
           }]
         },
-        "MetricGroups" : [{"Fn::Sub": "${GameName}_meta-server-fleet"}]
+        "MetricGroups" : [{"Fn::Sub": "${GameName}-meta-server-fleet"}]
       }
     },
 
@@ -318,6 +339,25 @@
             }]
           }
         }]
+      }
+    },
+
+    "GameServerAccessIAMRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "MaxSessionDuration" : 43200,
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
+        ],
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": "gamelift.amazonaws.com"},
+            "Action": "sts:AssumeRole"
+          }]
+        },
+        "RoleName": {"Fn::Sub": "${GameName}-iam-game-server-access-role"}
       }
     }
   },
