@@ -67,7 +67,7 @@ namespace Serverless.Tests
                 {
                     new KeySchemaElement
                     {
-                        AttributeName = PlayerSession.KEY_NAME,
+                        AttributeName = nameof(PlayerSession.PlayerId),
                         KeyType = KeyType.HASH,
                     }
                 },
@@ -75,7 +75,7 @@ namespace Serverless.Tests
                 {
                     new AttributeDefinition
                     {
-                        AttributeName = PlayerSession.KEY_NAME,
+                        AttributeName = nameof(PlayerSession.PlayerId),
                         AttributeType = ScalarAttributeType.S
                     }
                 },

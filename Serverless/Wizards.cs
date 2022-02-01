@@ -6,15 +6,15 @@ namespace Serverless
 {
     using System;
     using System.Net;
+    using System.Linq;
     using System.Threading.Tasks;
     using System.Collections.Generic;
-    using System.Linq;
-    using System.Threading;
+    
     using Amazon;
-    using Amazon.DynamoDBv2;
-    using Amazon.DynamoDBv2.DataModel;
     using Amazon.GameLift;
+    using Amazon.DynamoDBv2;
     using Amazon.GameLift.Model;
+    using Amazon.DynamoDBv2.DataModel;
     using Amazon.Lambda.APIGatewayEvents;
     
     using Newtonsoft.Json;
@@ -66,9 +66,8 @@ namespace Serverless
             {
                 PlayerId = playerId,
                 LastUpdated = DateTime.Now,
-                IsActive = false
             };
-            
+
             context.Logger.LogLine($"Fetched session: {fetchedSession}\n");
             
             // TODO: uncomment it when matchmaking process calibrated
@@ -108,11 +107,12 @@ namespace Serverless
             if (ticket.Status != MatchmakingConfigurationStatus.COMPLETED)
                 return new APIGatewayProxyResponse { StatusCode = (int) HttpStatusCode.InternalServerError };
 
-            fetchedSession.IsActive = true;
+            var metaServerSession = fetchedSession.ServerSessions[ServerType.Meta];
+            metaServerSession.IsActive = true;
             fetchedSession.LastUpdated = DateTime.Now;
-            fetchedSession.MetaGameSessionArn = ticket.GameSessionConnectionInfo.GameSessionArn;
-            fetchedSession.MetaServerIp = ticket.GameSessionConnectionInfo.IpAddress;
-            fetchedSession.MetaServerPort = ticket.GameSessionConnectionInfo.Port;
+            metaServerSession.SessionId = ticket.GameSessionConnectionInfo.GameSessionArn;
+            metaServerSession.Ip = ticket.GameSessionConnectionInfo.IpAddress;
+            metaServerSession.Port = ticket.GameSessionConnectionInfo.Port;
 
             await db.SaveAsync(fetchedSession);
 
