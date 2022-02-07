@@ -1,54 +1,55 @@
 ﻿namespace Serverless
 {
     using System;
-    using System.Collections.Generic;
     using System.Linq;
+    using Newtonsoft.Json;
+    using System.Collections.Generic;
+    using Amazon.DynamoDBv2.DataModel;
 
-    public enum ServerType
+    public class PlayerSessionRecord
     {
-        Meta,
-        Battle,
-        Lobby
-    }
-
-    public class PlayerSession
-    {
-        public class ServerSession
+        [DynamoDBHashKey] public string PlayerId { get; set; }
+        
+        public string data { get; set; }
+        
+        public PlayerSessionRecord()
         {
-            public string SessionId { get; set; }
-
-            public bool IsActive { get; set; }
-
-            public string Ip { get; set; }
-
-            public int Port { get; set; }
-
-            #if !RELEASE
-            public int DebuggerPort { get; set; }
-            #endif
-
-            public override string ToString()
-            {
-                return $"{nameof(SessionId)}: {SessionId}"
-                     + $"{nameof(IsActive)}: {IsActive}"
-                     + $"{nameof(Ip)}: {Ip}"
-                     + $"{nameof(Port)}: {Port}";
-            }
+        }
+        
+        public PlayerSessionRecord(string playerId, string data)
+        {
+            PlayerId = playerId;
+            this.data = data;
+        }
+        
+        public PlayerSessionRecord(PlayerSession ps)
+        {
+            PlayerId = ps.PlayerId;
+            data = JsonConvert.SerializeObject(ps);
         }
 
+        public PlayerSession GetPlayerSession()
+        {
+            return JsonConvert.DeserializeObject<PlayerSession>(data);
+        }
+    }
+    
+    public class PlayerSession
+    {
         public string PlayerId { get; set; }
 
         public DateTime LastUpdated { get; set; }
 
         public Dictionary<ServerType, ServerSession> ServerSessions { get; set; }
 
+        [JsonConstructor]
         public PlayerSession()
         {
             ServerSessions = new Dictionary<ServerType, ServerSession>
             {
-                {ServerType.Meta, new ServerSession()},
-                {ServerType.Battle, new ServerSession()},
-                {ServerType.Lobby, new ServerSession()}
+                { ServerType.Meta, new ServerSession() },
+                { ServerType.Battle, new ServerSession() },
+                { ServerType.Lobby, new ServerSession() }
             };
         }
 
@@ -57,6 +58,34 @@
             return $"{nameof(PlayerId)}: {PlayerId}, " 
                  + $"{nameof(LastUpdated)}: {LastUpdated}, "
                  + $"{nameof(ServerSessions)}: {ServerSessions.PrintCollection()}";
+        }
+    }
+    
+    public enum ServerType
+    {
+        Meta,
+        Battle,
+        Lobby
+    }
+    
+    public class ServerSession
+    {
+        public string SessionId { get; set; }
+
+        public bool IsActive { get; set; }
+
+        public string Ip { get; set; }
+
+        public int Port { get; set; }
+        
+        public int DebuggerPort { get; set; }
+
+        public override string ToString()
+        {
+            return $"{nameof(SessionId)}: {SessionId}"
+                   + $"{nameof(IsActive)}: {IsActive}"
+                   + $"{nameof(Ip)}: {Ip}"
+                   + $"{nameof(Port)}: {Port}";
         }
     }
     

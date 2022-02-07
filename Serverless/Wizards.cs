@@ -7,10 +7,12 @@ namespace Serverless
     using System;
     using System.Net;
     using System.Linq;
+    using System.Net.Sockets;
     using System.Threading.Tasks;
     using System.Collections.Generic;
     
     using Amazon;
+    using Amazon.SQS;
     using Amazon.GameLift;
     using Amazon.DynamoDBv2;
     using Amazon.GameLift.Model;
@@ -23,6 +25,7 @@ namespace Serverless
     {
         private IDynamoDBContext db;
         private AmazonGameLiftClient gameLiftClient;
+        private AmazonSQSClient sqsClient;
 
         private const string SESSIONS_TABLE_NAME = "SessionsTable";
         private const string META_SERVER_MATCHMAKER = "MetaServerMatchmaker";
@@ -41,15 +44,16 @@ namespace Serverless
         
         public Wizards()
         {
-            CreateTypeMapping(typeof(PlayerSession), Environment.GetEnvironmentVariable(SESSIONS_TABLE_NAME));
+            CreateTypeMapping(typeof(PlayerSessionRecord), Environment.GetEnvironmentVariable(SESSIONS_TABLE_NAME));
             db = new DynamoDBContext(new AmazonDynamoDBClient(), config);
             
             gameLiftClient = new AmazonGameLiftClient();
+            sqsClient = new AmazonSQSClient();
         }
 
         public Wizards(IAmazonDynamoDB dbClient, string tableName)
         {
-            CreateTypeMapping(typeof(PlayerSession), tableName);
+            CreateTypeMapping(typeof(PlayerSessionRecord), tableName);
             db = new DynamoDBContext(dbClient, config);
             
             gameLiftClient = new AmazonGameLiftClient();
@@ -61,28 +65,37 @@ namespace Serverless
             context.Logger.LogLine($"Auth context: {string.Join(Environment.NewLine, request.RequestContext.Authorizer.Claims)}\n");
 
             var playerId = request.RequestContext.Authorizer.Claims["cognito:username"];
-            
-            var fetchedSession = await db.LoadAsync<PlayerSession>(playerId) ?? new PlayerSession
-            {
-                PlayerId = playerId,
-                LastUpdated = DateTime.Now,
-            };
+
+            var fetchedSessionRecord = await db.LoadAsync<PlayerSessionRecord>(playerId);
+            var fetchedSession = fetchedSessionRecord != null 
+                ? fetchedSessionRecord.GetPlayerSession() 
+                : new PlayerSession { PlayerId = playerId, LastUpdated = DateTime.UtcNow };
+
+            if (fetchedSession == null)
+                return Error();
 
             context.Logger.LogLine($"Fetched session: {fetchedSession}\n");
-            
-            // TODO: uncomment it when matchmaking process calibrated
-            // if (fetchedSession.IsActive)
-            //     return new APIGatewayProxyResponse { StatusCode = (int) HttpStatusCode.MethodNotAllowed };
 
+            // return last session if session still alive and server is running
+            var serverSession = fetchedSession.ServerSessions[ServerType.Meta];
+            if (serverSession.IsActive && await TryPingServer(serverSession.Ip, serverSession.Port))
+            {
+                context.Logger.LogLine("Session still alive. Returning it.");
+                // ReSharper disable once PossibleNullReferenceException
+                OK(fetchedSessionRecord.data);
+            }
+
+            // else start matchmaking
             var ticketId = Guid.NewGuid().ToString();
+            var playerMatchId = Guid.NewGuid().ToString();
             await gameLiftClient.StartMatchmakingAsync(new StartMatchmakingRequest
             {
                 TicketId = ticketId,
                 ConfigurationName = Environment.GetEnvironmentVariable(META_SERVER_MATCHMAKER),
-                Players = new List<Player> { new Player { PlayerId = Guid.NewGuid().ToString(), Team = "players" }},
+                Players = new List<Player> { new Player { PlayerId = playerMatchId, Team = "players" }},
             });
             
-            context.Logger.LogLine($"Matchmaking started! TicketId: {ticketId}\n");
+            context.Logger.LogLine($"Matchmaking started! TicketId: {ticketId} PlayerMatchId: {playerMatchId} \n");
 
             // TODO: make sns topic with wss gateway connection to track mm events
             
@@ -105,25 +118,34 @@ namespace Serverless
             context.Logger.LogLine($"Matchmaking done with result {ticket.Status.Value}\n");
             
             if (ticket.Status != MatchmakingConfigurationStatus.COMPLETED)
-                return new APIGatewayProxyResponse { StatusCode = (int) HttpStatusCode.InternalServerError };
+                return Error();
 
             var metaServerSession = fetchedSession.ServerSessions[ServerType.Meta];
             metaServerSession.IsActive = true;
             fetchedSession.LastUpdated = DateTime.Now;
-            metaServerSession.SessionId = ticket.GameSessionConnectionInfo.GameSessionArn;
+            metaServerSession.SessionId = ticket.GameSessionConnectionInfo.MatchedPlayerSessions.First(ps => ps.PlayerId == playerMatchId).PlayerSessionId;
             metaServerSession.Ip = ticket.GameSessionConnectionInfo.IpAddress;
             metaServerSession.Port = ticket.GameSessionConnectionInfo.Port;
 
-            await db.SaveAsync(fetchedSession);
-
-            var response = new APIGatewayProxyResponse
+            var sessionData = JsonConvert.SerializeObject(fetchedSession);
+            await db.SaveAsync(new PlayerSessionRecord(playerId, sessionData));
+            
+            return OK(sessionData);
+        }
+        
+        private static APIGatewayProxyResponse OK(string data)
+        {
+            return new APIGatewayProxyResponse
             {
                 StatusCode = (int) HttpStatusCode.OK,
-                Body = JsonConvert.SerializeObject(fetchedSession),
+                Body = data,
                 Headers = new Dictionary<string, string> {{"Content-Type", "text/plain"}}
             };
+        }
 
-            return response;
+        private static APIGatewayProxyResponse Error()
+        {
+            return new APIGatewayProxyResponse { StatusCode = (int) HttpStatusCode.InternalServerError };
         }
 
         private static bool MatchmakingIsDone(MatchmakingConfigurationStatus status)
@@ -132,6 +154,26 @@ namespace Serverless
                 || status == MatchmakingConfigurationStatus.TIMED_OUT
                 || status == MatchmakingConfigurationStatus.CANCELLED
                 || status == MatchmakingConfigurationStatus.COMPLETED;
+        }
+
+        private static async Task<bool> TryPingServer(string ip, int port)
+        {
+            try
+            {
+                var client = new TcpClient();
+                var connect = client.ConnectAsync(ip, port);
+                await Task.WhenAny(connect, Task.Delay(3_000));
+                var connected = client.Connected;
+                
+                client.Close();
+                client.Dispose();
+                
+                return connected;
+            }
+            catch (SocketException)
+            {
+                return false;
+            }
         }
     }
 }
