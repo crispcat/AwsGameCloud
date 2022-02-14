@@ -236,7 +236,7 @@
         "EC2InstanceType": "c5.large",
         "FleetType": "ON_DEMAND",
         "LogPaths": ["/local/game/journal.log"],
-        "NewGameSessionProtectionPolicy": "FullProtection",
+        "NewGameSessionProtectionPolicy": "NoProtection",
         "ResourceCreationLimitPolicy": {
           "NewGameSessionsPerCreator": 3,
           "PolicyPeriodInMinutes": 1
@@ -287,10 +287,10 @@
     "MatchmakerEventsTopic" : {
       "Type" : "AWS::SNS::Topic",
       "Properties" : {
-          "Subscription" : {
+          "Subscription" : [{
             "Endpoint" : { "Fn::GetAtt" : [ "MatchmakerEventsQueue", "Arn" ] },
             "Protocol" : "sqs"
-          }
+          }]
         }
     },
 
@@ -308,6 +308,7 @@
     "MessagingPolicy": {
       "Type" : "AWS::SNS::TopicPolicy",
       "Properties" : {
+        "Topics" : [{"Ref": "MatchmakerEventsTopic"}],
         "PolicyDocument" : {
           "Version": "2008-10-17",
           "Statement": [
@@ -316,8 +317,7 @@
             "Principal": { "Service": "gamelift.amazonaws.com" },
             "Action": "SNS:Publish",
             "Resource": "*"
-          }],
-          "Topics" : {"Ref": "MatchmakerEventsTopic"}
+          }]
         }
       }
     },

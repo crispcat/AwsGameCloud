@@ -1,3 +1,10 @@
+if ($args[0] -eq "--help")
+{
+	Write-Host '.\deploy.ps "gameName" "0.0.1"(version) "awsRegion" "true"/"false"(deploy game servers) "C:\.."(game server build path)'
+	return
+}
+
+
 $gameName=$args[0]
 $version=$args[1]
 $region=$args[2]

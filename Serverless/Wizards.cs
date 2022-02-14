@@ -18,17 +18,17 @@ namespace Serverless
     using Amazon.GameLift.Model;
     using Amazon.DynamoDBv2.DataModel;
     using Amazon.Lambda.APIGatewayEvents;
-    
     using Newtonsoft.Json;
 
     public class Wizards
     {
         private IDynamoDBContext db;
         private AmazonGameLiftClient gameLiftClient;
-        private AmazonSQSClient sqsClient;
+        private MatchmakingMessageConsumer matchmakingMessageConsumer;
 
         private const string SESSIONS_TABLE_NAME = "SessionsTable";
         private const string META_SERVER_MATCHMAKER = "MetaServerMatchmaker";
+        private const string MATCHMAKER_MESSAGES_QUEUE = "MatchmakerEventsQueue";
         
         private static readonly DynamoDBContextConfig config = new DynamoDBContextConfig
         {
@@ -48,7 +48,7 @@ namespace Serverless
             db = new DynamoDBContext(new AmazonDynamoDBClient(), config);
             
             gameLiftClient = new AmazonGameLiftClient();
-            sqsClient = new AmazonSQSClient();
+            matchmakingMessageConsumer = new MatchmakingMessageConsumer(Environment.GetEnvironmentVariable(MATCHMAKER_MESSAGES_QUEUE));
         }
 
         public Wizards(IAmazonDynamoDB dbClient, string tableName)
@@ -57,6 +57,7 @@ namespace Serverless
             db = new DynamoDBContext(dbClient, config);
             
             gameLiftClient = new AmazonGameLiftClient();
+            matchmakingMessageConsumer = new MatchmakingMessageConsumer(Environment.GetEnvironmentVariable(MATCHMAKER_MESSAGES_QUEUE));
         }
 
         public async Task<APIGatewayProxyResponse> MetaSessionWizard(APIGatewayProxyRequest request, ILambdaContext context)
@@ -98,6 +99,7 @@ namespace Serverless
             context.Logger.LogLine($"Matchmaking started! TicketId: {ticketId} PlayerMatchId: {playerMatchId} \n");
 
             // TODO: make sns topic with wss gateway connection to track mm events
+            //ReceiveMatchmakingMessage();
             
             MatchmakingTicket ticket = null;
             var ticketIds = new List<string> { ticketId };
@@ -109,7 +111,7 @@ namespace Serverless
                 ticket = 
                     (await gameLiftClient.DescribeMatchmakingAsync(new DescribeMatchmakingRequest { TicketIds = ticketIds }))
                     .TicketList
-                    .First();
+                    .First(t => t.TicketId == ticketId);
 
                 context.Logger.LogLine($"Matchmaking in progress... TicketId: {ticketId}. Status: {ticket.Status}\n");
                 matchmakingInProgress = !MatchmakingIsDone(ticket.Status);
@@ -119,7 +121,7 @@ namespace Serverless
             
             if (ticket.Status != MatchmakingConfigurationStatus.COMPLETED)
                 return Error();
-
+            
             var metaServerSession = fetchedSession.ServerSessions[ServerType.Meta];
             metaServerSession.IsActive = true;
             fetchedSession.LastUpdated = DateTime.Now;
@@ -132,7 +134,7 @@ namespace Serverless
             
             return OK(sessionData);
         }
-        
+
         private static APIGatewayProxyResponse OK(string data)
         {
             return new APIGatewayProxyResponse
